@@ -150,8 +150,8 @@ Flash to ESP32 via Arduino IDE. Board: ESP32 Dev Module.
 #include "driver/gpio.h"
 #include "esp_timer.h"
 
-#define PIN_SIG1  18  // 50% duty → ECU Pin 71
-#define PIN_SIG2  19  // 25% duty → ECU Pin 66
+#define PIN_SIG1  8  // 50% duty → ECU Pin 71
+#define PIN_SIG2  7  // 25% duty → ECU Pin 66
 
 // 3200 Hz = 312.5µs period
 // t=0:     Sig1=HIGH, Sig2=LOW
