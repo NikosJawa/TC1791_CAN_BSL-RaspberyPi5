@@ -258,6 +258,127 @@ abf425508513c27314e31d3542b92b1b # These are the boot passwords. The first 8 byt
 
 Now use `VW_Flash` to reflash the ECU from CBOOT with whatever software you wanted. 
 
+## Extract Boot Passwords
+
+```bash
+cd ~/TC1791_CAN_BSL
+uv run bootloader.py
+```
+
+```
+(BSL) extract_boot_passwords
+```
+
+This enters SBOOT 4 times via PWM break-in, cracks the Seed/Key each time, captures CRC values, and calculates boot passwords.
+
+Each round should show:
+```
+CRC Address Reached:
+0x8001430c          ← start + 0x100, exactly one iteration
+CRC32 Current Value:
+0xa980571e          ← not 0x0
+```
+
+Final output:
+```
+39a9485b5b3f95b5d6419bd3ddc97f92
+```
+
+First 16 hex chars = Read passwords: `39a9485b 5b3f95b5`
+Last 16 hex chars = Write passwords: `d6419bd3 ddc97f92`
+
+These are permanent, burned into OTP during manufacturing.
+
+---
+
+## Bench Read
+
+```
+(BSL) upload
+(BSL) send_read_passwords 39a9485b 5b3f95b5
+(BSL) flashinfo
+```
+
+Check that "Flash Locked Error" shows DISABLED. If still ENABLED, your CRC_DELAY may be wrong.
+
+```
+(BSL) dumpmem AF000000 18000 PMU0_DFlash.bin
+(BSL) dumpmem AF080000 18000 PMU1_DFlash.bin
+(BSL) dumpmem 80000000 200000 PMU0_PFlash.bin
+(BSL) dumpmem 80800000 100000 PMU1_PFlash.bin
+```
+
+Back these up.
+
+---
+
+## Flash Immo-Off Binary
+
+### Erase ASW3 and Reset into CBOOT
+
+This bypasses the immobilizer and gets the ECU into a state where VW_Flash can communicate via UDS.
+
+```
+(BSL) upload
+(BSL) send_write_passwords d6419bd3 ddc97f92
+(BSL) erase_sector 80800000
+(BSL) reset
+```
+
+The ECU will now boot into CBOOT since ASW3 is erased and the application software can't start. Disconnect the BSL wires (RST, HWCFG). Leave only CAN H/L/G + 12V connected.
+
+### Unlock with FRF
+
+```bash
+cd ~/VW_Flash
+uv run VW_Flash.py --action flash_unlock --frf FL_8V0906259H__0001.frf
+```
+
+### Flash
+
+```bash
+uv run VW_Flash.py --action flash_bin \
+  --input_bin ./8V0906264H__0003_immo_off.bin \
+  --patch_cboot
+```
+
+`--patch_cboot` patches the Customer Bootloader to accept modified software blocks.
+
+### Verify
+
+```bash
+uv run VW_Flash.py --action get_ecu_info
+```
+
+You should see your part number, software version, and `State Of Flash Memory: 00`.
+
+---
+
+## VIN
+
+The ECU will have the donor vehicle's VIN. This causes a gateway DTC for VIN mismatch and is TÜV-relevant.
+
+The VIN is stored in encrypted DFlash — you can't hex-edit it.
+The VIN mismatch doesn't prevent the engine from starting with immo-off.
+
+---
+
+## Troubleshooting
+
+**No CAN traffic:** Check 12V, CAN H/L, and especially the CAN ground (HAT G pin to ECU). Run `candump can0`. If `ip link show can0` shows `state DOWN`, restart CAN.
+
+**None responses after reset:** Loose HWCFG pullup wire on the ECU PCB. Resolder.
+
+**FAILURE / 0x0A7 messages (ECU boots normally):** PWM signals not reaching the ECU. This is what the ESP32 solves — Pi 5 software PWM doesn't cut it. Also try swapping the Pin 66/71 connections.
+
+**CRC Value = 0x0:** `CRC_DELAY` too small. Increase it.
+
+**CRC Address too high:** `CRC_DELAY` too large. Decrease it.
+
+**`socket.bind() got an unexpected keyword argument 'rxid'`:** Wrong can-isotp version. `uv pip install "can-isotp<2.0"`.
+
+---
+
 # Current tools:
 
 * [bootloader.py](bootloader.py) : This tool uploads "bootloader.bin" into an ECU in Bootstrap Loader mode.
