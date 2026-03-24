@@ -195,8 +195,8 @@ void loop() {
 ### Verify
 
 Measure DC voltage with a multimeter (Hz mode won't work at 3.2kHz on cheap meters):
-- GPIO 18: ~1.65V (50% of 3.3V)
-- GPIO 19: ~0.825V (25% of 3.3V)
+- GPIO 8: ~1.65V (50% of 3.3V)
+- GPIO 7: ~0.825V (25% of 3.3V)
 
 The ESP32 runs PWM continuously once powered via USB. No communication with the Pi needed.
 
