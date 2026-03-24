@@ -30,7 +30,7 @@ Furthermore, if the ECU is not locked by the Immobilizer and is functioning corr
 * High speed (3.2khz capable) 3.3V to 5V level shifters. 2 level shifters are required - most cheap "I2C converter" boards on Amazon, eBay, Aliexpress will work. 
 * Soldering equipment OR a "BDM frame" and probes. These test points and vias are very easy to solder with a steady hand, but if you do not wish to solder, a "BDM frame" and probes as found on Aliexpress or Amazon will also work.
 * A mechanism for connecting to pins on the ECU connector. Even alligator clips will work in a pinch. I have had good luck with simple crimp-on female pin connectors (JST or the like) wrapped in heat shrink. Or, a "pigtail" style take-off ECU harness, often sold as "4H0906971A," which will need to be re-pinned as the two PWM connections are not usually connected at all.
-
+* ESP32 s3 mini
 
 # Hardware Setup
 
@@ -60,10 +60,148 @@ Connect the following pins of the left-hand connector when looking at the opened
 * GROUND: 1 (this is the upper-right large pin).
 * CANH: 79, to CAN interface CanH
 * CANL: 80, to CAN interface CanL
-* "PWM1": 66 (only necessary for SBOOT), to a 5V level shifter attached to GPIO 12.
-* "PWM2": 71 (only necessary for SBOOT), to a 5V level shifter attached to GPIO 13.
+* "PWM1": 66 (only necessary for SBOOT), to a 5V level shifter attached to ESP32 7.
+* "PWM2": 71 (only necessary for SBOOT), to a 5V level shifter attached to ESP32 8.
 
 ![Connector Pinout](pinout_connector.jpg)
+
+# Raspberry Pi 5 Setup
+
+Enable SPI via `sudo raspi-config`.
+
+Add to `/boot/firmware/config.txt`:
+
+```
+dtparam=spi=on
+dtoverlay=spi1-3cs
+dtoverlay=mcp251xfd,spi0-0,interrupt=25
+dtoverlay=mcp251xfd,spi1-0,interrupt=24
+```
+
+Reboot. Then bring up CAN:
+
+```bash
+sudo ip link set can0 up type can bitrate 500000
+sudo ifconfig can0 txqueuelen 65536
+```
+
+Verify with `candump can0` (from `can-utils`) — you should see ECU traffic when the ECU is powered.
+
+### Repositories
+
+```bash
+cd ~
+git clone https://github.com/bri3d/TC1791_CAN_BSL
+git clone https://github.com/bri3d/Simos18_SBOOT
+git clone https://github.com/bri3d/VW_Flash
+```
+
+### Compile twister
+
+```bash
+cd ~/Simos18_SBOOT
+gcc twister.c -o twister -O3 -march=native -fopenmp -lgmp
+```
+
+You may need to install `libgmp-dev` and `libgomp1` if they're not already present.
+
+### Python Environment
+
+```bash
+cd ~/TC1791_CAN_BSL
+uv pip install python-can tqdm udsoncan==1.21 "can-isotp<2.0" lz4
+```
+
+`can-isotp` must be below 2.0. Version 2.x changed the socket API and breaks both TC1791_CAN_BSL and VW_Flash.
+
+### VW_Flash
+
+```bash
+cd ~/VW_Flash
+
+# Remove wxPython from dependencies — it's only for the GUI and takes forever to build on ARM
+sed -i '/wxpython/Id' pyproject.toml requirements.txt 2>/dev/null
+
+# Compile LZSS
+cd lib/lzss
+gcc -O2 -o lzss lzss.c
+cd ../..
+
+uv pip install -r requirements.txt
+uv pip install "can-isotp<2.0"
+```
+
+---
+
+# ESP32 PWM Generator
+
+The Pi 5 uses the RP1 chip for GPIO. `pigpio` (the DMA-based timing library used in bri3d's original scripts) does not work on the Pi 5. Software PWM has too much jitter for reliable SBOOT entry. The ESP32 has dedicated hardware timers and provides jitter-free PWM at 3.2kHz.
+
+The Tricore GPTA comparator measures two signals:
+- Signal 1 (ECU Pin 71): 3.2kHz, 50% duty cycle
+- Signal 2 (ECU Pin 66): 3.2kHz, 25% duty cycle, 270° phase offset
+
+### Arduino Sketch
+
+Flash to ESP32 via Arduino IDE. Board: ESP32 Dev Module.
+
+```cpp
+#include "soc/gpio_struct.h"
+#include "driver/gpio.h"
+#include "esp_timer.h"
+
+#define PIN_SIG1  18  // 50% duty → ECU Pin 71
+#define PIN_SIG2  19  // 25% duty → ECU Pin 66
+
+// 3200 Hz = 312.5µs period
+// t=0:     Sig1=HIGH, Sig2=LOW
+// t=156:   Sig1=LOW
+// t=234:   Sig2=HIGH
+// t=312:   Sig2=LOW → next cycle
+
+void pwmTask(void *param) {
+  gpio_set_direction((gpio_num_t)PIN_SIG1, GPIO_MODE_OUTPUT);
+  gpio_set_direction((gpio_num_t)PIN_SIG2, GPIO_MODE_OUTPUT);
+
+  int64_t cycle_start;
+
+  while(1) {
+    cycle_start = esp_timer_get_time();
+
+    GPIO.out_w1ts = (1 << PIN_SIG1);
+    GPIO.out_w1tc = (1 << PIN_SIG2);
+
+    while(esp_timer_get_time() - cycle_start < 156);
+    GPIO.out_w1tc = (1 << PIN_SIG1);
+
+    while(esp_timer_get_time() - cycle_start < 234);
+    GPIO.out_w1ts = (1 << PIN_SIG2);
+
+    while(esp_timer_get_time() - cycle_start < 312);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  xTaskCreatePinnedToCore(pwmTask, "PWM", 2048, NULL, configMAX_PRIORITIES - 1, NULL, 1);
+  Serial.println("PWM 3200Hz running on Core 1");
+}
+
+void loop() {
+  delay(1000);
+}
+```
+
+### Verify
+
+Measure DC voltage with a multimeter (Hz mode won't work at 3.2kHz on cheap meters):
+- GPIO 18: ~1.65V (50% of 3.3V)
+- GPIO 19: ~0.825V (25% of 3.3V)
+
+The ESP32 runs PWM continuously once powered via USB. No communication with the Pi needed.
+
+---
+
 
 # Setup for Password Extraction
 
@@ -74,9 +212,8 @@ Connect the following pins of the left-hand connector when looking at the opened
 
 * Perform the above steps to configure the ECU for BSL mode. Ensure you have `../Simos18_SBOOT/twister` and `../crchack/crchack` compiled.
 * In total, you should have seven connections to the ECU mainboard, via probes or solder - a jumper between two test points, two points connected via resistor to a third point (3V3), and two points connected directly to GPIO 23 and 24 on the Pi. 
-* You should also have eight connections to the ECU connector: GPIO 12 should be attached to a 5V level shifter, then to pin 66 on the ECU connector. GPIO 13 should be attached to another 5V level shifter, then to pin 71 on the ECU connector. CanH to pin 79 and CanL to pin 80. Then, 3 power connections and 1 ground connection. 
+* You should also have eight connections to the ECU connector: ESP32 7 should be attached to a 5V level shifter, then to pin 66 on the ECU connector. ESP32 8 should be attached to another 5V level shifter, then to pin 71 on the ECU connector. CanH to pin 79 and CanL to pin 80. Then, 3 power connections and 1 ground connection. 
 * If your Pi and ECU are powered separately (for example, the Pi via USB and the ECU via a bench PSU), make sure the grounds are linked and not floating as this can cause issues. The easiest way to do this is to connect another GND pin on the ECU connector to a GND on the Pi.
-* Ensure `pigpiod` is running: `sudo pigpiod`
 * Ensure `can0` is up at bitrate `500000` and with the `txqueuelen` increased: `sudo ip link set can0 up type can bitrate 500000 && sudo ifconfig can0 txqueuelen 65536`
 * Start `python3 bootloader.py` and run the following commands:
 
