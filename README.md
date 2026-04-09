@@ -91,7 +91,7 @@ Verify with `candump can0` (from `can-utils`) — you should see ECU traffic whe
 
 ```bash
 cd ~
-git clone https://github.com/bri3d/TC1791_CAN_BSL
+git clone https://github.com/NikosJawa/TC1791_CAN_BSL-RaspberyPi5
 git clone https://github.com/bri3d/Simos18_SBOOT
 git clone https://github.com/bri3d/VW_Flash
 ```
