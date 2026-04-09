@@ -7,7 +7,7 @@ import math
 from tqdm import tqdm
 import struct
 import time
-import pigpio
+import lgpio  # Pi 5 replacement for pigpio
 import subprocess
 from udsoncan.connections import IsoTPSocketConnection
 import socket
@@ -19,14 +19,19 @@ TWISTER_PATH = (
 
 # Configurable parameters:
 
-# For a Pi 3B+, 0.0005 seems right. For a Pi 4, 0.0008 has been observed to work correctly (presumably latency between sleep and GPIO is lower).
-CRC_DELAY = (
-    0.0005
-)  # This is the amount of time a single iteration of the CRC process takes. This will need to be adjusted through observation, checking the output of the boot password read process until 0x100 bytes are being checked.
+# For Pi 5: 0.001 works better - Pi 5 is faster than Pi 3B+
+# If CRC value comes back as 0x0, delay is too small
+# If CRC address jumps multiple iterations past target, delay is too large
+# You want exactly one iteration (start_address + 0x100)
+CRC_DELAY = 0.001
 
 SEED_START = (
     "1D00000"
 )  # This is the starting value for the expected timer value range for the Seed/Key calculation. This seems to work for both Pi 3B+ and Pi 4.
+
+# Pi 5 GPIO assignments (different from original due to CAN HAT conflicts)
+GPIO_RESET = 23     # Original was 23 - controls ECU reset
+GPIO_BOOT_CFG = 24  # Original was 24 - pulled low for BSL mode
 
 sector_map_tc1791 = {  # Sector lengths for PMEM routines
     0: 0x4000,
@@ -64,7 +69,7 @@ def bits(byte):
 
 
 def print_success_failure(data):
-    if data[0] is 0xA0:
+    if data[0] == 0xA0:  # Fixed: 'is' -> '==' for value comparison
         print("Success")
     else:
         print("Failure! " + data.hex())
@@ -81,10 +86,12 @@ def get_key_from_seed(seed_data):
 
 
 can_interface = "can0"
-bus = can.interface.Bus(can_interface, bustype="socketcan")
-pi = pigpio.pi()
-pi.set_mode(23, pigpio.OUTPUT)
-pi.set_pull_up_down(23, pigpio.PUD_UP)
+bus = can.interface.Bus(can_interface, interface="socketcan")
+
+# lgpio setup for Pi 5
+gpio_handle = lgpio.gpiochip_open(0)
+lgpio.gpio_claim_output(gpio_handle, GPIO_RESET)
+lgpio.gpio_write(gpio_handle, GPIO_RESET, 1)  # Default high (not reset)
 
 
 def get_isotp_conn():
@@ -97,14 +104,20 @@ def get_isotp_conn():
 
 
 def sboot_pwm():
+    """
+    PWM is handled by external ESP32 on Pi 5 setup.
+    This function does nothing but returns a mock object with cancel() method
+    for compatibility with existing code flow.
+    """
     print("PWM handled by ESP32 (external)")
-    return type('', (), {'cancel': lambda self: None})()
+    return type('MockPWM', (), {'cancel': lambda self: None})()
 
 
 def reset_ecu():
-    pi.write(23, 0)
+    """Reset ECU by pulling reset line low briefly"""
+    lgpio.gpio_write(gpio_handle, GPIO_RESET, 0)
     time.sleep(0.01)
-    pi.write(23, 1)
+    lgpio.gpio_write(gpio_handle, GPIO_RESET, 1)
 
 
 def sboot_getseed():
@@ -276,11 +289,13 @@ def extract_boot_passwords():
 
 
 def prepare_upload_bsl():
-    # Pin 24 -> BOOT_CFG pin, pulled to GND to enable BSL mode.
+    """
+    Prepare for BSL upload by pulling BOOT_CFG low.
+    Pin GPIO_BOOT_CFG -> BOOT_CFG pin, pulled to GND to enable BSL mode.
+    """
     print("Resetting ECU into HWCFG BSL Mode...")
-    pi.set_mode(24, pigpio.OUTPUT)
-    pi.set_pull_up_down(24, pigpio.PUD_DOWN)
-    pi.write(24, 0)
+    lgpio.gpio_claim_output(gpio_handle, GPIO_BOOT_CFG)
+    lgpio.gpio_write(gpio_handle, GPIO_BOOT_CFG, 0)
 
 
 def upload_bsl(skip_prep=False):
@@ -288,8 +303,8 @@ def upload_bsl(skip_prep=False):
         prepare_upload_bsl()
     reset_ecu()
     time.sleep(0.1)
-    pi.set_mode(24, pigpio.INPUT)
-    pi.set_pull_up_down(24, pigpio.PUD_OFF)
+    # Release BOOT_CFG - set to input (high-Z)
+    lgpio.gpio_claim_input(gpio_handle, GPIO_BOOT_CFG)
 
     print("Sending BSL initialization message...")
     # send bootloader.bin to CAN BSL in Tricore
@@ -542,7 +557,6 @@ def read_compressed(address, size, filename):
     while total_size_remaining > 0:
         message = bus.recv()
         compressed_size = size_remaining = int.from_bytes(message.data[5:8], "big")
-        #print("Waiting for compressed data of size: " + hex(size_remaining))
         data = bytearray()
         sequence = 1
         while size_remaining > 0:
@@ -562,11 +576,12 @@ def read_compressed(address, size, filename):
         t.update(decompressed_size)
         total_size_remaining -= decompressed_size
         output_file.write(decompressed_data)
-        data = bytearray([0x07, 0xAC])  # send an ACk packet
+        data = bytearray([0x07, 0xAC])  # send an ACK packet
         message = Message(is_extended_id=False, dlc=8, arbitration_id=0x300, data=data)
         bus.send(message)
     output_file.close()
     t.close()
+
 
 def write_file(address, size, filename):
     input_file = open(filename, "rb")
@@ -576,17 +591,17 @@ def write_file(address, size, filename):
     block_counter = 0
     while total_size_remaining > 0:
         if block_counter <= 0:
-          block_counter = 256
-          data = bytearray([0x06])
-          address_bytes = address_int.to_bytes(4, "big")
-          data += address_bytes
-          message = Message(is_extended_id=False, dlc=8, arbitration_id=0x300, data=data)
-          bus.send(message)
-          bus.recv()
+            block_counter = 256
+            data = bytearray([0x06])
+            address_bytes = address_int.to_bytes(4, "big")
+            data += address_bytes
+            message = Message(is_extended_id=False, dlc=8, arbitration_id=0x300, data=data)
+            bus.send(message)
+            bus.recv()
         if block_counter < 7:
-          data_len = block_counter
+            data_len = block_counter
         else:
-          data_len = 7
+            data_len = 7
         file_data = input_file.read(data_len)
         file_data += bytearray([0xAA] * (7 - data_len))
         data = bytearray([0x06])
@@ -597,15 +612,20 @@ def write_file(address, size, filename):
         block_counter -= data_len
         total_size_remaining -= data_len
         if block_counter <= 0:
-          bus.recv()
-          t.update(total_size_remaining)
-          address_int += 256
+            bus.recv()
+            t.update(total_size_remaining)
+            address_int += 256
     input_file.close()
     t.close()
 
 
+def cleanup_gpio():
+    """Clean up GPIO resources on exit"""
+    lgpio.gpiochip_close(gpio_handle)
+
+
 class BootloaderRepl(cmd.Cmd):
-    intro = "Welcome to Tricore BSL. Type help or ? to list commands, you are likely looking for upload to start.\n"
+    intro = "Welcome to Tricore BSL (Pi 5 version). Type help or ? to list commands, you are likely looking for upload to start.\n"
     prompt = "(BSL) "
     file = None
 
@@ -715,6 +735,7 @@ class BootloaderRepl(cmd.Cmd):
 
     def do_bye(self, arg):
         "Exit"
+        cleanup_gpio()
         return True
 
 
@@ -723,4 +744,8 @@ def parse(arg):
     return tuple(map(int, arg.split()))
 
 
-BootloaderRepl().cmdloop()
+if __name__ == "__main__":
+    try:
+        BootloaderRepl().cmdloop()
+    finally:
+        cleanup_gpio()
