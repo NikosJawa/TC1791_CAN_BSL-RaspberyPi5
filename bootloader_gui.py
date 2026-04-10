@@ -65,7 +65,7 @@ def can_is_up(interface=CAN_INTERFACE):
 # (CAN bus, GPIO) is unavailable.  Wrap in try/except for dev machines.
 # ---------------------------------------------------------------------------
 try:
-    import bsl
+    import bootloader as bsl
     BSL_AVAILABLE = True
 except Exception as e:
     BSL_AVAILABLE = False
