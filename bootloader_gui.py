@@ -502,23 +502,38 @@ class MainFrame(wx.Frame):
         self._run(_read, label="flash_info")
 
     def _on_dumpmaskrom(self, _evt):
-        self._run(bsl.read_bytes_file, 0xAFFFC000, 0x4000, "maskrom.bin",
+        with wx.FileDialog(self, "Save Mask ROM dump",
+                           wildcard="Binary files (*.bin)|*.bin|All files (*)|*",
+                           defaultFile="maskrom.bin",
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fd:
+            if fd.ShowModal() == wx.ID_CANCEL:
+                return
+            filename = fd.GetPath()
+        self._run(bsl.read_bytes_file, 0xAFFFC000, 0x4000, filename,
                   label="dump_maskrom")
 
     def _on_dumpmem(self, _evt):
         dlg = InputDialog(self, "Dump Memory", [
             ("Start address (hex)", "e.g. D0000000"),
             ("Size (hex)",          "e.g. 4000"),
-            ("Output filename",     "e.g. dump.bin"),
         ])
-        if dlg.ShowModal() == wx.ID_OK:
-            v = dlg.get_values()
-            self._run(bsl.read_bytes_file,
-                      int(v["Start address (hex)"], 16),
-                      int(v["Size (hex)"], 16),
-                      v["Output filename"],
-                      label="dump_mem")
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        v = dlg.get_values()
         dlg.Destroy()
+        with wx.FileDialog(self, "Save memory dump",
+                           wildcard="Binary files (*.bin)|*.bin|All files (*)|*",
+                           defaultFile="dump.bin",
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fd:
+            if fd.ShowModal() == wx.ID_CANCEL:
+                return
+            filename = fd.GetPath()
+        self._run(bsl.read_bytes_file,
+                  int(v["Start address (hex)"], 16),
+                  int(v["Size (hex)"], 16),
+                  filename,
+                  label="dump_mem")
 
     def _on_erase_sector(self, _evt):
         dlg = InputDialog(self, "Erase Sector",
@@ -591,31 +606,46 @@ class MainFrame(wx.Frame):
 
     def _on_compressed_read(self, _evt):
         dlg = InputDialog(self, "Compressed Read", [
-            ("Address (hex)",  "e.g. 80000000"),
-            ("Length (hex)",   "e.g. 00100000"),
-            ("Output filename","e.g. flash.bin"),
+            ("Address (hex)", "e.g. 80000000"),
+            ("Length (hex)",  "e.g. 00100000"),
         ])
-        if dlg.ShowModal() == wx.ID_OK:
-            v = dlg.get_values()
-            addr = bytearray.fromhex(v["Address (hex)"])
-            size = bytearray.fromhex(v["Length (hex)"])
-            self._run(bsl.read_compressed, addr, size, v["Output filename"],
-                      label="compressed_read")
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        v = dlg.get_values()
         dlg.Destroy()
+        with wx.FileDialog(self, "Save compressed read output",
+                           wildcard="Binary files (*.bin)|*.bin|All files (*)|*",
+                           defaultFile="flash.bin",
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fd:
+            if fd.ShowModal() == wx.ID_CANCEL:
+                return
+            filename = fd.GetPath()
+        addr = bytearray.fromhex(v["Address (hex)"])
+        size = bytearray.fromhex(v["Length (hex)"])
+        self._run(bsl.read_compressed, addr, size, filename,
+                  label="compressed_read")
 
     def _on_write_file(self, _evt):
+        with wx.FileDialog(self, "Choose file to write",
+                           wildcard="Binary files (*.bin)|*.bin|All files (*)|*",
+                           style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as fd:
+            if fd.ShowModal() == wx.ID_CANCEL:
+                return
+            filename = fd.GetPath()
         dlg = InputDialog(self, "Write File", [
-            ("Address (hex)",  "e.g. 80000000"),
-            ("Length (hex)",   "e.g. 00100000"),
-            ("Input filename", "e.g. flash.bin"),
+            ("Address (hex)", "e.g. 80000000"),
+            ("Length (hex)",  "e.g. 00100000"),
         ])
-        if dlg.ShowModal() == wx.ID_OK:
-            v = dlg.get_values()
-            addr = bytearray.fromhex(v["Address (hex)"])
-            size = bytearray.fromhex(v["Length (hex)"])
-            self._run(bsl.write_file, addr, size, v["Input filename"],
-                      label="write_file")
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        v = dlg.get_values()
         dlg.Destroy()
+        addr = bytearray.fromhex(v["Address (hex)"])
+        size = bytearray.fromhex(v["Length (hex)"])
+        self._run(bsl.write_file, addr, size, filename,
+                  label="write_file")
 
     # ------------------------------------------------------------------
     # Manual command bar  (mirrors BootloaderRepl dispatch)
