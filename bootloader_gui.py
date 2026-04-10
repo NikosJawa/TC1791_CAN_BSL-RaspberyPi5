@@ -180,12 +180,10 @@ class MainFrame(wx.Frame):
         self._start_log_timer()
 
         if not BSL_AVAILABLE:
-            self._log(f"[WARN] bsl.py could not be imported: {BSL_IMPORT_ERROR}",
+            self._log(f"[WARN] bootloader.py could not be imported: {BSL_IMPORT_ERROR}",
                       CLR_FAILURE)
             self._log("[WARN] GUI is in demo mode — buttons will show dialogs only.",
                       CLR_MUTED)
-        else:
-            self._log("BSL module loaded successfully.", CLR_SUCCESS)
 
         self.SetMinSize((720, 500))
         self.Centre()
@@ -204,26 +202,26 @@ class MainFrame(wx.Frame):
         # ── toolbar row ────────────────────────────────────────────────
         tb = wx.BoxSizer(wx.HORIZONTAL)
 
-        # BSL status
-        self._status_dot  = wx.StaticText(panel, label="●")
-        self._status_text = wx.StaticText(panel, label="Initialising…")
-        self._status_dot.SetForegroundColour(CLR_MUTED)
-
-        # CAN status
+        # CAN link status (interface up/down)
         self._can_dot  = wx.StaticText(panel, label="●")
         self._can_text = wx.StaticText(panel, label="CAN: checking…")
         self._can_dot.SetForegroundColour(CLR_MUTED)
+
+        # CAN activity status (candump detected frames)
+        self._act_dot  = wx.StaticText(panel, label="●")
+        self._act_text = wx.StaticText(panel, label="CAN activity: waiting…")
+        self._act_dot.SetForegroundColour(CLR_MUTED)
 
         can_btn   = wx.Button(panel, label="Bring up CAN", size=(-1, 28))
         clear_btn = wx.Button(panel, label="Clear log",    size=(-1, 28))
         can_btn.Bind(wx.EVT_BUTTON,   self._on_bring_up_can)
         clear_btn.Bind(wx.EVT_BUTTON, self._on_clear)
 
-        tb.Add(self._status_dot,  flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  border=8)
-        tb.Add(self._status_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  border=4)
+        tb.Add(self._can_dot,  flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=8)
+        tb.Add(self._can_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=4)
         tb.AddSpacer(18)
-        tb.Add(self._can_dot,     flag=wx.ALIGN_CENTER_VERTICAL)
-        tb.Add(self._can_text,    flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT,  border=4)
+        tb.Add(self._act_dot,  flag=wx.ALIGN_CENTER_VERTICAL)
+        tb.Add(self._act_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=4)
         tb.AddStretchSpacer()
         tb.Add(can_btn,   flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=6)
         tb.Add(clear_btn, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=8)
@@ -255,7 +253,6 @@ class MainFrame(wx.Frame):
         outer.Add(cmd_row, flag=wx.EXPAND | wx.ALL, border=8)
 
         panel.SetSizer(outer)
-        self._update_status()
 
     def _build_sidebar(self, parent) -> wx.Panel:
         sidebar = scrolled.ScrolledPanel(parent, style=wx.BORDER_NONE)
@@ -370,14 +367,6 @@ class MainFrame(wx.Frame):
     # ------------------------------------------------------------------
     # Status helpers
     # ------------------------------------------------------------------
-    def _update_status(self):
-        if BSL_AVAILABLE:
-            self._status_dot.SetForegroundColour(CLR_SUCCESS)
-            self._status_text.SetLabel("BSL ready")
-        else:
-            self._status_dot.SetForegroundColour(CLR_FAILURE)
-            self._status_text.SetLabel("BSL module unavailable (demo mode)")
-
     def _update_can_status(self, is_up: bool):
         if is_up:
             self._can_dot.SetForegroundColour(CLR_SUCCESS)
@@ -385,6 +374,60 @@ class MainFrame(wx.Frame):
         else:
             self._can_dot.SetForegroundColour(CLR_FAILURE)
             self._can_text.SetLabel(f"CAN: {CAN_INTERFACE} DOWN")
+            self._update_activity_status(False)
+
+    def _update_activity_status(self, active: bool, frame_count: int = 0):
+        if active:
+            self._act_dot.SetForegroundColour(CLR_SUCCESS)
+            self._act_text.SetLabel(f"CAN ready  ({frame_count} frame{'s' if frame_count != 1 else ''} seen)")
+        else:
+            self._act_dot.SetForegroundColour(CLR_MUTED)
+            self._act_text.SetLabel("CAN activity: none")
+
+    def _start_candump_check(self):
+        """
+        Run candump can0 for up to 3 seconds.  If any frames arrive,
+        mark CAN as ready.  Repeats every 10 seconds so the indicator
+        stays current.
+        """
+        self._act_dot.SetForegroundColour(CLR_MUTED)
+        self._act_text.SetLabel("CAN activity: listening…")
+
+        def _poll():
+            try:
+                proc = subprocess.Popen(
+                    ["candump", "-T", "3000", "-n", "1", CAN_INTERFACE],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                stdout, _ = proc.communicate(timeout=5)
+                frames = [l for l in stdout.splitlines() if l.strip()]
+                active = len(frames) > 0
+                wx.CallAfter(self._update_activity_status, active, len(frames))
+                if active:
+                    self._log_queue.put(
+                        f"candump: {len(frames)} frame(s) detected on {CAN_INTERFACE} — CAN ready."
+                    )
+            except FileNotFoundError:
+                wx.CallAfter(self._update_activity_status, False)
+                self._log_queue.put(
+                    "candump not found — install can-utils: sudo apt install can-utils"
+                )
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                wx.CallAfter(self._update_activity_status, False)
+            except Exception as exc:
+                wx.CallAfter(self._update_activity_status, False)
+                self._log_queue.put(f"candump error: {exc}")
+
+            # Schedule the next check in 10 s (only if window still exists)
+            try:
+                wx.CallAfter(lambda: wx.CallLater(10000, self._start_candump_check))
+            except Exception:
+                pass
+
+        threading.Thread(target=_poll, daemon=True).start()
 
     def _bring_up_can_async(self):
         """Run CAN bring-up in a background thread, update status when done."""
@@ -405,6 +448,7 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self._update_can_status, up)
             if up:
                 self._log_queue.put(f"CAN interface {CAN_INTERFACE} is UP.")
+                wx.CallAfter(self._start_candump_check)
             else:
                 self._log_queue.put(
                     f"CAN interface {CAN_INTERFACE} could not be brought up. "
