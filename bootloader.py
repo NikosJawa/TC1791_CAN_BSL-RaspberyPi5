@@ -30,8 +30,8 @@ SEED_START = (
 )  # This is the starting value for the expected timer value range for the Seed/Key calculation. This seems to work for both Pi 3B+ and Pi 4.
 
 # Pi 5 GPIO assignments (different from original due to CAN HAT conflicts)
-GPIO_RESET = 22     # Original was 23 - controls ECU reset
-GPIO_BOOT_CFG = 27  # Original was 24 - pulled low for BSL mode
+GPIO_RESET = 17     # Original was 23 - controls ECU reset
+GPIO_BOOT_CFG = 18  # Original was 24 - pulled low for BSL mode
 
 sector_map_tc1791 = {  # Sector lengths for PMEM routines
     0: 0x4000,
