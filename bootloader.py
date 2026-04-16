@@ -590,15 +590,15 @@ def write_file(address, size, filename):
     block_counter = 0
     while total_size_remaining > 0:
         if block_counter <= 0:
-            block_counter = 256
-            data = bytearray([0x06])
-            address_bytes = address_int.to_bytes(4, "big")
-            data += address_bytes
-            message = Message(is_extended_id=False, dlc=8, arbitration_id=0x300, data=data)
-            bus.send(message)
-            bus.recv()
+           block_counter = 256
+           data = bytearray([0x06])
+           address_bytes = address_int.to_bytes(4, "big")
+           data += address_bytes
+           message = Message(is_extended_id=False, dlc=8, arbitration_id=0x300, data=data)
+           bus.send(message)
+           bus.recv()
         if block_counter < 7:
-            data_len = block_counter
+           data_len = block_counter
         else:
             data_len = 7
         file_data = input_file.read(data_len)
@@ -611,9 +611,9 @@ def write_file(address, size, filename):
         block_counter -= data_len
         total_size_remaining -= data_len
         if block_counter <= 0:
-            bus.recv()
-            t.update(total_size_remaining)
-            address_int += 256
+           bus.recv()
+           t.update(total_size_remaining)
+           address_int += 256
     input_file.close()
     t.close()
 
