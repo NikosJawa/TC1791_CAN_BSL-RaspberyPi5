@@ -752,3 +752,12 @@ if __name__ == "__main__":
         BootloaderRepl().cmdloop()
     finally:
         cleanup_gpio()
+
+# Fix
+_gpio_cleaned_up = False
+
+def cleanup_gpio():
+    global _gpio_cleaned_up
+    if not _gpio_cleaned_up:
+        lgpio.gpiochip_close(gpio_handle)
+        _gpio_cleaned_up = True
