@@ -622,9 +622,14 @@ def write_file(address, size, filename):
     t.close()
 
 
+    # Fix
+_gpio_cleaned_up = False
+
 def cleanup_gpio():
-    """Clean up GPIO resources on exit"""
-    lgpio.gpiochip_close(gpio_handle)
+    global _gpio_cleaned_up
+    if not _gpio_cleaned_up:
+        lgpio.gpiochip_close(gpio_handle)
+        _gpio_cleaned_up = True
 
 
 class BootloaderRepl(cmd.Cmd):
@@ -736,14 +741,7 @@ class BootloaderRepl(cmd.Cmd):
         "reset: reset ECU"
         reset_ecu()
 
-    # Fix
-_gpio_cleaned_up = False
 
-def cleanup_gpio():
-    global _gpio_cleaned_up
-    if not _gpio_cleaned_up:
-        lgpio.gpiochip_close(gpio_handle)
-        _gpio_cleaned_up = True
 
     def do_bye(self, arg):      # ← stays inside the class, correct indent
         "Exit"
