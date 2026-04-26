@@ -736,9 +736,17 @@ class BootloaderRepl(cmd.Cmd):
         "reset: reset ECU"
         reset_ecu()
 
+    # Fix
+_gpio_cleaned_up = False
+
+def cleanup_gpio():
+    global _gpio_cleaned_up
+    if not _gpio_cleaned_up:
+        lgpio.gpiochip_close(gpio_handle)
+        _gpio_cleaned_up = True
+
     def do_bye(self, arg):
         "Exit"
-        cleanup_gpio()
         return True
 
 
@@ -750,14 +758,4 @@ def parse(arg):
 if __name__ == "__main__":
     try:
         BootloaderRepl().cmdloop()
-    finally:
-        cleanup_gpio()
 
-# Fix
-_gpio_cleaned_up = False
-
-def cleanup_gpio():
-    global _gpio_cleaned_up
-    if not _gpio_cleaned_up:
-        lgpio.gpiochip_close(gpio_handle)
-        _gpio_cleaned_up = True
