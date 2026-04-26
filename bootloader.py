@@ -11,6 +11,7 @@ import lgpio  # Pi 5 replacement for pigpio
 import subprocess
 from udsoncan.connections import IsoTPSocketConnection
 import socket
+import threading
 
 
 TWISTER_PATH = (
@@ -52,6 +53,24 @@ sector_map_tc1791 = {  # Sector lengths for PMEM routines
     15: 0x40000,
 }
 
+def watch_twister(seed_data):
+    def _run():
+        print("\n=== TWISTER LIVE DEBUG ===")
+        p = subprocess.Popen(
+            [TWISTER_PATH, SEED_START, seed_data, "1"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        for line in p.stdout:
+            print("[twister]", line.strip())
+        p.wait()
+        print("=== TWISTER DEBUG END ===\n")
+
+    t = threading.Thread(target=_run)
+    t.daemon = True
+    t.start()
 
 def bits(byte):
     bit_arr = [
@@ -263,6 +282,7 @@ def sboot_login():
     sboot_seed = sboot_shell()
     print("Calculating key for seed: ")
     print(sboot_seed.hex())
+    watch_twister(sboot_seed.hex()[0:8])
     key = get_key_from_seed(sboot_seed.hex()[0:8])
     print("Key calculated : ")
     print(key)
