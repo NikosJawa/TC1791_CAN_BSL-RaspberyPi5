@@ -745,8 +745,9 @@ def cleanup_gpio():
         lgpio.gpiochip_close(gpio_handle)
         _gpio_cleaned_up = True
 
-    def do_bye(self, arg):
+    def do_bye(self, arg):      # ← stays inside the class, correct indent
         "Exit"
+        cleanup_gpio()
         return True
 
 
@@ -758,4 +759,5 @@ def parse(arg):
 if __name__ == "__main__":
     try:
         BootloaderRepl().cmdloop()
-
+    finally:
+        cleanup_gpio()          # ← stays here, safe because of the guard
