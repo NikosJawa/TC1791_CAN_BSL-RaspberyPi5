@@ -91,7 +91,6 @@ bus = can.interface.Bus(can_interface, interface="socketcan")
 # lgpio setup for Pi 5
 gpio_handle = lgpio.gpiochip_open(0)
 lgpio.gpio_claim_output(gpio_handle, GPIO_RESET)
-lgpio.gpio_set_pull_up_down(h, GPIO_RESET, lgpio.SET_PULL_UP)
 
 def get_isotp_conn():
     conn = IsoTPSocketConnection(
@@ -293,6 +292,10 @@ def prepare_upload_bsl():
     Pin GPIO_BOOT_CFG -> BOOT_CFG pin, pulled to GND to enable BSL mode.
     """
     print("Resetting ECU into HWCFG BSL Mode...")
+    try:
+        lgpio.gpio_free(gpio_handle, GPIO_BOOT_CFG)
+    except:
+        pass
     lgpio.gpio_claim_output(gpio_handle, GPIO_BOOT_CFG)
     lgpio.gpio_write(gpio_handle, GPIO_BOOT_CFG, 0)
 
