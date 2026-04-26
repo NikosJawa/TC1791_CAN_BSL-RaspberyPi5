@@ -306,6 +306,7 @@ def upload_bsl(skip_prep=False):
     reset_ecu()
     time.sleep(0.1)
     # Release BOOT_CFG - set to input (high-Z)
+    lgpio.gpio_free(gpio_handle, GPIO_BOOT_CFG)
     lgpio.gpio_claim_input(gpio_handle, GPIO_BOOT_CFG)
 
     print("Sending BSL initialization message...")
